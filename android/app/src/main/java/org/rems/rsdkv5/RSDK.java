@@ -42,7 +42,6 @@ import androidx.documentfile.provider.DocumentFile;
 
 public class RSDK extends GameActivity {
     static {
-        // https://developer.android.com/ndk/guides/cpp-support#shared_runtimes
         System.loadLibrary("c++_shared");
         System.loadLibrary("RetroEngine");
     }
@@ -64,44 +63,32 @@ public class RSDK extends GameActivity {
     }
 
     private void hideSystemUI() {
-
         if (SDK_INT >= Build.VERSION_CODES.P) {
-            getWindow()
-                    .getAttributes().layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().getAttributes().layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         }
 
         View decorView = getWindow().getDecorView();
-        WindowInsetsControllerCompat controller = new WindowInsetsControllerCompat(getWindow(),
-                decorView);
+        WindowInsetsControllerCompat controller = new WindowInsetsControllerCompat(getWindow(), decorView);
         controller.hide(WindowInsetsCompat.Type.systemBars());
         controller.hide(WindowInsetsCompat.Type.displayCutout());
-        controller.setSystemBarsBehavior(
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        controller.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        if (basePath == null) {
-            if (getIntent().getData() != null) {
-                basePath = getIntent().getData();
-            } else
-                basePath = Launcher.refreshStore();
-
-            if (basePath == null) {
-                Log.e("RSDKv5-J", "Base path file not found; game cannot be started standalone.");
-                setResult(RESULT_CANCELED);
-                finishActivity(RESULT_CANCELED);
-            }
+        // Automatically target the isolated app sandbox files directory
+        java.io.File sandboxDir = this.getExternalFilesDir(null);
+        if (sandboxDir != null && !sandboxDir.exists()) {
+            sandboxDir.mkdirs();
         }
-
-        pathString = DocumentFile.fromTreeUri(getApplicationContext(), basePath).getUri().getEncodedPath()
-                + Uri.encode("/");
-
+        
+        // Convert the clean local sandbox path to a standard Android URI format
+        basePath = Uri.fromFile(sandboxDir);
+        pathString = sandboxDir.getAbsolutePath() + "/";
 
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         hideSystemUI();
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
+        getWindow().setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         cpc = getContentResolver().acquireContentProviderClient(basePath.getAuthority());
@@ -114,202 +101,22 @@ public class RSDK extends GameActivity {
 
         try {
             DocumentFile docfile = DocumentFile.fromTreeUri(this, basePath).findFile("log.txt");
-            Uri uri = docfile.getUri();
-
-            if (log == null)
-                log = getContentResolver().openOutputStream(uri, "wa");
+            if (docfile != null) {
+                Uri uri = docfile.getUri();
+                if (log == null)
+                    log = getContentResolver().openOutputStream(uri, "wa");
+            }
         } catch (FileNotFoundException e) {
             e.printStackTrace();
         }
-
-        loadingIcon = new LoadingIcon(this, this);
-        super.onCreate(savedInstanceState);
     }
 
-    @Override
-    protected void onCreateSurfaceView() {
-        this.mSurfaceView = new GameActivity.InputEnabledSurfaceView(this);
-        FrameLayout frameLayout = new FrameLayout(this);
-        this.contentViewId = ViewCompat.generateViewId();
-        frameLayout.setId(this.contentViewId);
-        frameLayout.addView(this.mSurfaceView);
-        frameLayout.addView(loadingIcon);
-        this.setContentView(frameLayout);
-        frameLayout.requestFocus();
-        this.mSurfaceView.getHolder().addCallback(this);
-        ViewCompat.setOnApplyWindowInsetsListener(this.mSurfaceView, this);
-    }
-
-    @Override
-    protected void onDestroy() {
-        setResult(RESULT_OK);
-        try {
-            log.close();
-        } catch (Exception e) {
-        }
-        finishActivity(RESULT_OK);
-        cpc.close();
-        super.onDestroy();
-    }
-
-    @Override
-    protected void onResume() {
-        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-        hideSystemUI();
-        super.onResume();
-    }
-
-    @Override
-    public boolean onTouchEvent(MotionEvent event) {
-        // this is mostly stolen from sdl LOL
-        // this func survives android v3 because it's just easier to handle
-        final int pointerCount = event.getPointerCount();
-        int action = event.getActionMasked();
-        int i = -1;
-
-        switch (action) {
-            case MotionEvent.ACTION_MOVE:
-                for (i = 0; i < pointerCount; i++) {
-                    int finger = event.getPointerId(i);
-                    float x = event.getX(i) / mSurfaceView.getWidth();
-                    float y = event.getY(i) / mSurfaceView.getHeight();
-
-                    nativeOnTouch(finger, action, x, y);
-                }
-                break;
-
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_DOWN:
-                // Primary pointer up/down, the index is always zero
-                i = 0;
-                /* fallthrough */
-            case MotionEvent.ACTION_POINTER_UP:
-            case MotionEvent.ACTION_POINTER_DOWN: {
-                // Non primary pointer up/down
-                if (i == -1) {
-                    i = event.getActionIndex();
-                }
-
-                int finger = event.getPointerId(i);
-                float x = event.getX(i) / mSurfaceView.getWidth();
-                float y = event.getY(i) / mSurfaceView.getHeight();
-
-                nativeOnTouch(finger, action, x, y);
-            }
-                break;
-
-            case MotionEvent.ACTION_CANCEL:
-                for (i = 0; i < pointerCount; i++) {
-                    int finger = event.getPointerId(i);
-                    float x = event.getX(i) / mSurfaceView.getWidth();
-                    float y = event.getY(i) / mSurfaceView.getHeight();
-
-                    nativeOnTouch(finger, MotionEvent.ACTION_UP, x, y);
-                }
-                break;
-
-            default:
-                break;
-        }
-
-        return true;
-    }
-
-    public void setLoadingIcon(byte[] waitSpinner) throws IOException {
-        loadingIcon.loadAnimationFiles(waitSpinner);
-    }
-
-    // public static native LoadingIcon.ImageInfo nativeLoadSheet(String image);
-
-    public static native byte[] nativeLoadFile(String file);
-    public static native void nativeOnTouch(int fingerID, int action, float x, float y);
-
-    public int getFD(byte[] file, byte mode) {
-        String filepath = new String(file);
-        String useMode;
-        // long start = System.nanoTime();
-        switch (mode) {
-            case 'a':
-                useMode = "wa";
-                break;
-            case 'r':
-                useMode = "r";
-                break;
-            default:
-                useMode = "w";
-                break;
-        }
-        try {
-            Uri uri = basePath.buildUpon().encodedPath(pathString + Uri.encode(filepath)).build();
-
-            AssetFileDescriptor jFd = cpc.openAssetFile(uri, useMode);
-            int fd = jFd.getParcelFileDescriptor().dup().detachFd();
-            jFd.close();
-            // Log.d("RSDKv5-J", Long.toString(System.nanoTime() - start));
-            return fd;
-        } catch (Exception e) {
-            try {
-                if (!useMode.equals("r")) {
-                    if (Launcher.instance == null) {
-                        Log.w("RSDKv5-J",
-                                String.format("Cannot create file %s; game opened without launcher", filepath));
-                        return 0;
-                    }
-                    Uri uri = Launcher.instance.createFile(filepath);
-                    ParcelFileDescriptor parcel = getContentResolver().openFileDescriptor(uri, useMode);
-                    int fd = parcel.dup().detachFd();
-                    parcel.close();
-                    // Log.d("RSDKv5-J", Long.toString(System.nanoTime() - start));
-                    return fd;
-                }
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
-        }
-        return 0;
-    }
-
-    public void writeLog(byte[] array, int as) {
-        Log.println(as, "RSDKv5", new String(array));
-        try {
-            log.write(array);
-            // log.write('\n');
-            log.flush();
-        } catch (Exception e) {
-        }
-    }
-
-    public boolean fsExists(byte[] path) {
-        Uri uri = basePath.buildUpon().encodedPath(pathString + Uri.encode(new String(path))).build();
-        return DocumentFile.fromSingleUri(getApplicationContext(), uri).exists();
-    }
-
-    public boolean fsIsDir(byte[] path) {
-        Uri uri = basePath.buildUpon().encodedPath(pathString + Uri.encode(new String(path))).build();
-        return DocumentFile.fromSingleUri(getApplicationContext(), uri).isDirectory();
-    }
-
-    public String[] fsDirIter(byte[] path) {
-        Uri uri = basePath.buildUpon().encodedPath(pathString + Uri.encode(new String(path))).build();
-        DocumentFile dir = DocumentFile.fromTreeUri(getApplicationContext(), uri);
-        if (dir.isFile())
-            return new String[0];
-        List<String> out = new ArrayList<String>();
-        for (DocumentFile file : dir.listFiles()) {
-            if (file.isDirectory())
-                out.add(new String(path) + "/" + file.getName());
-        }
-        return out.toArray(new String[0]);
-    }
-
-
-    static class RecursiveIterator {
-        static HashMap<byte[], RecursiveIterator> iterators = new HashMap<>();
-
-        String path;
-        Stack<Cursor> docs = new Stack<>();
-        Uri base;
-        ContentResolver resolver;
+    public static class RecursiveIterator {
+        private static final HashMap<byte[], RecursiveIterator> iterators = new HashMap<>();
+        private final Stack<Cursor> docs = new Stack<>();
+        private final Uri base;
+        private final String path;
+        private final ContentResolver resolver;
 
         public RecursiveIterator(@NonNull ContentResolver resolver, String path, Uri uri) {
             this.path = path;
